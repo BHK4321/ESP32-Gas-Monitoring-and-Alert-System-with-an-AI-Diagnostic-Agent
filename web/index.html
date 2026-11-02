@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local Gas Monitor</title><link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top"><div class="brand"><span class="mark">G</span><div><b>Local Gas Monitor</b><small>ESP32 DIGITAL TWIN · BENCH PROTOTYPE</small></div></div><div class="live"><i></i><span id="mode">CONNECTING</span></div></header>
+  <main>
+    <section class="intro"><div><p class="eyebrow">LOCAL SENSOR OPERATIONS</p><h1>Gas monitor <span class="tag" id="scenario">NORMAL</span></h1><p class="muted">Live readings, local alarms, and an evidence-first diagnostic agent.</p></div><button id="investigate" class="primary">✧ Investigate readings</button></section>
+    <section class="cards">
+      <article class="card"><small>GAS RESPONSE INDEX</small><div class="big" id="gas">—</div><span>normalized sensor response · demo scale</span></article>
+      <article class="card"><small>LOCAL ALARM</small><div class="big" id="alarm">—</div><span>determined by device-side logic</span></article>
+      <article class="card"><small>TEMPERATURE / HUMIDITY</small><div class="big compact" id="environment">—</div><span>available in simulator mode</span></article>
+      <article class="card"><small>DEVICE LINK</small><div class="big compact" id="source">Waiting…</div><span id="updated">—</span></article>
+    </section>
+    <section class="grid">
+      <article class="panel"><div class="panelhead"><div><h2>Live sensor response</h2><p class="muted">Recent normalized values; no ppm conversion implied.</p></div><strong class="smallstatus" id="quality">WAITING</strong></div><canvas id="chart" height="240"></canvas><div class="controls" id="scenarioControls"><button data-scenario="normal">Normal</button><button data-scenario="gas">Gas response</button><button data-scenario="drift">Sensor drift</button><button data-scenario="fault">Signal fault</button></div><p class="footnote" id="scenarioNote">Scenarios are simulated values for repeatable demonstration.</p></article>
+      <article class="panel agent"><div class="panelhead"><div><h2>Ollama diagnostic agent</h2><p class="muted">The local model selects read-only sensor checks and explains the evidence.</p></div><span class="badge" id="agentMode">OLLAMA · CONNECTING</span></div><div id="finding" class="empty">Waiting for an investigation. Use a scenario button, then select “Investigate readings.”</div><div id="tools" class="tools"></div></article>
+    </section>
+    <section class="panel action-panel"><div><h2>Response boundary</h2><p>The ESP32 handles immediate local indicators. The agent reports evidence and recommendations; it cannot operate hardware.</p></div><div class="lock">DEVICE-SIDE ALARM</div></section>
+    <footer>Research demonstrator only · simulated readings are not gas concentrations · never use as a certified safety alarm.</footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

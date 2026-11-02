@@ -1,0 +1,8 @@
+{
+  "name": "local-gas-monitor-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local gas-monitoring prototype with ESP32 telemetry and tool-based diagnostics",
+  "scripts": { "start": "node server.js", "test": "node --test" },
+  "engines": { "node": ">=20" }
+}

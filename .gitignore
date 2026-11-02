@@ -1,0 +1,3 @@
+node_modules/
+firmware/esp32_local_gas/credentials.h
+*.log
