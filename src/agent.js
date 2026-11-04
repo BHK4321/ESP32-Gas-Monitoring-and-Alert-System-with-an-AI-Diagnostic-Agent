@@ -1,145 +1,99 @@
+require('./load-env').loadEnvFile();
+const diagnostics = require('./diagnostics');
+
 const TOOL_DEFINITIONS = [
-  ['inspect_telemetry', 'Check whether sensor telemetry is recent and how many samples are available.'],
-  ['check_signal_quality', 'Inspect the latest window for missing, invalid, or unstable readings.'],
-  ['compare_baseline', 'Compare the recent gas response with the preceding baseline window.'],
-  ['estimate_drift', 'Estimate gradual response shift across the recent window.']
-].map(([name, description]) => ({
-  type: 'function',
-  function: { name, description, parameters: { type: 'object', properties: {}, additionalProperties: false } }
-}));
+  ['inspect_telemetry', 'Check data freshness, history length, and telemetry source.'],
+  ['assess_sensor_health', 'Check each channel for missing data, ADC rail, stuck values, and out-of-range response.'],
+  ['compare_channels', 'Compare recent response indices from independent channels A and B.'],
+  ['classify_response', 'Classify the observed pattern conservatively as shared anomaly, sensor fault, drift, normal, or uncertain.'],
+  ['estimate_drift', 'Estimate gradual or abrupt changes per channel and whether both channels agree.']
+].map(([name, description]) => ({ type: 'function', function: { name, description, parameters: { type: 'object', properties: {}, additionalProperties: false } } }));
 
 const TOOL_NAMES = new Set(TOOL_DEFINITIONS.map(x => x.function.name));
 const UNSAFE_REASSURANCE = /\b(?:no|not|without|zero)\s+(?:immediate\s+)?(?:safety\s+)?(?:concerns?|risk|danger|hazard)\b|\b(?:within|inside)\s+(?:the\s+)?(?:(?:acceptable|safe|normal|expected)\s+)?(?:operating\s+)?(?:range|limits?|threshold)\b|\b(?:is|are|looks|seems)\s+safe\b|\ball[-\s]clear\b/i;
 const UNSAFE_CONTROL_ADVICE = /\b(?:disable|deactivate|silence|clear|reset|bypass|turn\s+off)\b.{0,35}\b(?:alarm|sensor|relay|fan|valve|actuator)\b/i;
-
-function inspectTelemetry(state, now = Date.now()) {
-  const latest = state.latest || {};
-  const ageMs = latest.timestamp ? now - latest.timestamp : Infinity;
-  return { fresh: ageMs < 5000, ageMs: Number.isFinite(ageMs) ? ageMs : null, count: (state.history || []).length };
-}
-
-function checkSignalQuality(state) {
-  const recent = (state.history || []).slice(-12).map(x => x.gas).filter(Number.isFinite);
-  const latest = state.latest || {};
-  const span = recent.length ? Math.max(...recent) - Math.min(...recent) : 0;
-  return {
-    valid: Number.isFinite(latest.gas) && latest.gas >= 0 && latest.gas <= 1.5 && latest.quality !== 'unstable' && span < 0.75 && recent.length >= 5,
-    samples: recent.length,
-    span: +span.toFixed(3),
-    qualityFlag: latest.quality || 'unknown'
-  };
-}
-
-function compareBaseline(state) {
-  const history = state.history || [], latest = state.latest || {};
-  const old = history.slice(-60, -12).map(x => x.gas).filter(Number.isFinite);
-  const recent = history.slice(-12).map(x => x.gas).filter(Number.isFinite);
-  const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : latest.gas;
-  const baseline = mean(old), recentMean = mean(recent);
-  return { baselineIndex: +baseline.toFixed(3), recentMeanIndex: +recentMean.toFixed(3), riseIndex: +(recentMean - baseline).toFixed(3) };
-}
-
-function estimateDrift(state) {
-  const window = (state.history || []).slice(-30).map(x => x.gas).filter(Number.isFinite);
-  const shift = window.length > 1 ? window.at(-1) - window[0] : 0;
-  const steps = window.slice(1).map((x, i) => Math.abs(x - window[i]));
-  const largestStep = steps.length ? Math.max(...steps) : 0;
-  const largestStepShare = Math.abs(shift) > 0 ? largestStep / Math.abs(shift) : 0;
-  const pattern = largestStepShare > 0.35 ? 'abrupt_change' : Math.abs(shift) > 0.12 ? 'gradual_shift' : 'stable_or_small_change';
-  return { shiftIndex: +shift.toFixed(3), largestStepIndex: +largestStep.toFixed(3), largestStepShare: +largestStepShare.toFixed(3), pattern, samples: window.length };
-}
-
-const TOOL_RUNNERS = {
-  inspect_telemetry: state => inspectTelemetry(state),
-  check_signal_quality: state => checkSignalQuality(state),
-  compare_baseline: state => compareBaseline(state),
-  estimate_drift: state => estimateDrift(state)
-};
+const CONFIRMED_GAS_CLAIM = /\b(?:(?:confirmed|definitely|detected)\s+(?:a\s+)?(?:gas\s+leak|leak|gas)|(?:gas\s+)?(?:leak|gas)\s+(?:was\s+)?(?:confirmed|detected|definitely\s+detected))\b/i;
 
 function runReadOnlyTool(name, state) {
+  const runners = {
+    inspect_telemetry: diagnostics.inspectTelemetry,
+    assess_sensor_health: diagnostics.assessSensorHealth,
+    compare_channels: diagnostics.compareChannels,
+    classify_response: diagnostics.classifyResponse,
+    estimate_drift: diagnostics.estimateDrift
+  };
   if (!TOOL_NAMES.has(name)) throw new Error(`Tool is not allowed: ${name}`);
-  return TOOL_RUNNERS[name](state);
+  return runners[name](state);
 }
 
 async function runOllamaAgent(state, options = {}) {
-  const endpoint = options.endpoint || process.env.OLLAMA_URL || 'http://127.0.0.1:11434/api/chat';
-  const model = options.model || process.env.OLLAMA_MODEL || 'qwen2.5:1.5b';
+  const endpoint = options.endpoint || process.env.OLLAMA_URL || 'https://ollama.com/api/chat';
+  const model = options.model || process.env.OLLAMA_MODEL || 'gpt-oss:120b';
+  const cloud = new URL(endpoint).hostname === 'ollama.com';
+  const apiKey = options.apiKey || process.env.OLLAMA_API_KEY;
+  if (cloud && !apiKey) throw new Error('OLLAMA_API_KEY is required for Ollama Cloud. Set it in this terminal before starting the server.');
   const fetchImpl = options.fetchImpl || fetch;
-  const history = state.history || [];
   const latest = state.latest || {};
-  const requiredTools = new Set(['inspect_telemetry', 'check_signal_quality']);
-  if (latest.localAlarm || state.scenario === 'gas' || state.scenario === 'drift') {
-    requiredTools.add('compare_baseline');
-    requiredTools.add('estimate_drift');
-  }
+  const requiredTools = new Set(['inspect_telemetry', 'assess_sensor_health', 'classify_response']);
+  const turnsUsed = [];
+  const result = diagnostics.classifyResponse(state);
   const messages = [
-    { role: 'system', content: 'You are a local gas-sensor diagnostics agent. Use the required read-only tools before answering; select additional tools when evidence needs checking. Report evidence and one next step in at most 80 words. Follow the change pattern returned by estimate_drift; do not call an abrupt change gradual or infer gradual drift from a single endpoint difference. Always call the value a normalized response index; it is not ppm or gas identity. Never declare the area safe or confirm a real leak from this prototype. Never control, clear, or bypass actuators or the ESP32 alarm; the device owns immediate alarm output. If data are stale or poor quality, say they cannot be trusted.' },
-    { role: 'user', content: JSON.stringify({ task: 'Investigate this reading using diagnostic tools.', scenario: state.scenario, sampleCount: history.length, requiredTools: [...requiredTools], latest: { normalizedResponseIndex: latest.gas, sensorRawADC: latest.gasRaw, temperatureC: latest.temperature, humidityPercent: latest.humidity, localAlarm: latest.localAlarm, quality: latest.quality, source: latest.source, timestamp: latest.timestamp } }) }
+    { role: 'system', content: 'You are a sensor diagnostics agent. Select and call the required read-only tools before answering. Use tool outputs as evidence; do not diagnose a real leak or assert the physical cause. Distinguish sensor fault, shared response anomaly, drift, and uncertain channel disagreement. Call an uncertain result uncertain. Report key numeric evidence and one next step in at most 90 words. A response index is relative to each sensor startup baseline, not ppm or gas identity. Never declare an area safe, and never control, clear, or bypass the ESP32 alarm or other actuator.' },
+    { role: 'user', content: JSON.stringify({ task: 'Investigate the latest sensor history, choose diagnostic checks, and explain what the evidence supports.', scenario: state.scenario, historySamples: (state.history || []).length, requiredTools: [...requiredTools], latest: { responseIndexA: latest.sensors?.a?.index, responseIndexB: latest.sensors?.b?.index, rawA: latest.sensors?.a?.raw, rawB: latest.sensors?.b?.raw, temperatureC: latest.temperature, humidityPercent: latest.humidity, localAlarm: latest.localAlarm, source: latest.source }, ruleClassification: result.classification }) }
   ];
   const trace = [];
 
-  for (let turn = 0; turn < 8; turn++) {
+  for (let turn = 0; turn < 10; turn++) {
     let response;
     try {
-      response = await fetchImpl(endpoint, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model, messages, tools: TOOL_DEFINITIONS, stream: false, think: false, keep_alive: '10m', options: { temperature: 0.1, num_predict: 160, num_ctx: 4096 } }),
-        signal: AbortSignal.timeout(options.timeoutMs || 180_000)
-      });
-    } catch (err) {
-      throw new Error(`Cannot reach local Ollama at ${endpoint}: ${err.message}`);
-    }
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(`Ollama API returned HTTP ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`);
-    }
+      const headers = { 'content-type': 'application/json' };
+      if (cloud) headers.authorization = `Bearer ${apiKey}`;
+      response = await fetchImpl(endpoint, { method: 'POST', headers, body: JSON.stringify({ model, messages, tools: TOOL_DEFINITIONS, stream: false, think: false, options: { temperature: 0.1, num_predict: 192, num_ctx: 4096 } }), signal: AbortSignal.timeout(options.timeoutMs || 180_000) });
+    } catch (err) { throw new Error(`Cannot reach Ollama API at ${endpoint}: ${err.message}`); }
+    if (!response.ok) { const detail = await response.text().catch(() => ''); throw new Error(`Ollama API returned HTTP ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`); }
     const payload = await response.json();
     const message = payload.message;
     if (!message) throw new Error('Ollama returned no chat message.');
     const calls = message.tool_calls || [];
-
+    turnsUsed.push(calls.map(call => call.function?.name || 'unknown').join(',') || 'final');
     if (calls.length) {
       messages.push(message);
       for (const call of calls) {
         const name = call.function?.name;
         if (!TOOL_NAMES.has(name)) {
           trace.push({ tool: name || 'unknown', result: { error: 'Rejected: tool is not on the read-only allowlist.' } });
-          messages.push({ role: 'tool', tool_name: name || 'unknown', content: 'Tool rejected. Only the listed read-only sensor diagnostics are available.' });
-          continue;
+          messages.push({ role: 'tool', tool_name: name || 'unknown', content: 'Tool rejected. Only listed read-only diagnostics are available.' });
+        } else {
+          const toolResult = runReadOnlyTool(name, state);
+          trace.push({ tool: name, result: toolResult });
+          messages.push({ role: 'tool', tool_name: name, content: JSON.stringify(toolResult) });
         }
-        const result = runReadOnlyTool(name, state);
-        trace.push({ tool: name, result });
-        messages.push({ role: 'tool', tool_name: name, content: JSON.stringify(result) });
-        if (trace.length >= 8) break;
+        if (trace.length >= 10) break;
       }
       continue;
     }
-
-    const completedTools = new Set(trace.map(x => x.tool));
-    const missingTools = [...requiredTools].filter(x => !completedTools.has(x));
-    if (missingTools.length) {
-      messages.push(message, { role: 'user', content: `Before reporting, call these required read-only tools: ${missingTools.join(', ')}.` });
-      continue;
-    }
+    const completed = new Set(trace.map(x => x.tool));
+    const missing = [...requiredTools].filter(name => !completed.has(name));
+    if (missing.length) { messages.push(message, { role: 'user', content: `Before answering, call these required read-only tools: ${missing.join(', ')}.` }); continue; }
     const summary = (message.content || '').trim();
-    if (!summary) throw new Error('Ollama finished without a diagnostic summary. Try a tool-calling model such as qwen2.5:1.5b.');
-    const pattern = trace.find(x => x.tool === 'estimate_drift')?.result?.pattern;
+    if (!summary) throw new Error('Ollama finished without a diagnostic summary.');
+    const pattern = trace.find(x => x.tool === 'estimate_drift')?.result?.jointPattern;
     const contradictsPattern = (pattern === 'abrupt_change' && /\b(?:gradual|gradually|slow drift|slow shift)\b/i.test(summary)) || (pattern === 'gradual_shift' && /\b(?:abrupt|sudden)\b/i.test(summary));
-    const rejectionReasons = [];
-    if (UNSAFE_REASSURANCE.test(summary)) rejectionReasons.push('unsupported safety or threshold reassurance');
-    if (UNSAFE_CONTROL_ADVICE.test(summary)) rejectionReasons.push('actuator-control advice');
-    if (contradictsPattern) rejectionReasons.push('wording that conflicts with the measured change pattern');
-    const rejected = rejectionReasons.length > 0;
-    const localAlarm = latest.localAlarm ? 'ACTIVE' : 'CLEAR';
-    const alarmDescription = latest.source === 'simulation'
-      ? `Simulator alarm: ${localAlarm} (the ${state.scenario || 'selected'} scenario is simulated; this is not an ESP32 alarm).`
-      : `ESP32-reported local alarm: ${localAlarm}.${latest.localAlarm ? ' Follow established site emergency procedures; do not use this prototype to clear an alarm.' : ''}`;
-    const guardedSummary = rejected
-      ? `The Ollama explanation was hidden because it matched a safeguard for ${rejectionReasons.join(' and ')}. This does not mean the model confirmed a leak or assessed the area as safe. ${alarmDescription} This prototype is not a certified gas detector.`
-      : `${summary.replace(/\bgas concentration\b/gi, 'normalized sensor response').replace(/\bgas level\b/gi, 'normalized response index')}\n\nSafety limit: a normalized response index is not a gas concentration, and this prototype cannot determine whether an area is safe. ${alarmDescription}`;
-    return { id: `INV-${Date.now()}`, timestamp: Date.now(), code: rejected ? 'OLLAMA_OUTPUT_WITHHELD' : 'OLLAMA_DIAGNOSIS', summary: guardedSummary, recommendations: [], tools: trace, confidence: 'MODEL-GENERATED', provider: 'Ollama', model };
+    const reasons = [];
+    if (UNSAFE_REASSURANCE.test(summary)) reasons.push('unsupported safety or threshold reassurance');
+    if (UNSAFE_CONTROL_ADVICE.test(summary)) reasons.push('actuator-control advice');
+    if (CONFIRMED_GAS_CLAIM.test(summary)) reasons.push('a definitive gas/leak claim');
+    if (contradictsPattern) reasons.push('wording that conflicts with the measured change pattern');
+    const rejected = reasons.length > 0;
+    const alarmSource = latest.source === 'simulation' ? `Simulator alarm: ${latest.localAlarm ? 'ACTIVE' : 'CLEAR'} (${state.scenario} scenario).` : `ESP32 alarm: ${latest.localAlarm ? 'ACTIVE' : 'CLEAR'}.`;
+    const guarded = rejected
+      ? `The model explanation was hidden because it matched a safeguard for ${reasons.join(' and ')}. Rule-based finding: ${result.classification} (${result.reason}) ${alarmSource}`
+      : `${summary}\n\nRule-based finding: ${result.classification}. ${result.reason} ${alarmSource}`;
+    return { id: `INV-${Date.now()}`, timestamp: Date.now(), code: rejected ? 'OLLAMA_OUTPUT_WITHHELD' : 'OLLAMA_DIAGNOSIS', summary: guarded, recommendations: [], tools: trace, diagnostics: result, confidence: 'MODEL-GENERATED + RULE METRICS', provider: cloud ? 'Ollama Cloud' : 'Ollama local API', model };
   }
-  throw new Error('Ollama did not complete a tool-based diagnosis within 8 turns. Check that the selected model supports tool calling.');
+  const completed = [...new Set(turnsUsed.flatMap(x => x === 'final' ? [] : x.split(',')))];
+  const missing = [...requiredTools].filter(name => !completed.includes(name));
+  throw new Error(`Ollama did not complete a tool-based diagnosis within 10 turns. Completed: ${completed.join(', ') || 'none'}. Missing required: ${missing.join(', ') || 'none'}.`);
 }
 
-module.exports = { runOllamaAgent, TOOL_DEFINITIONS, runReadOnlyTool, inspectTelemetry, checkSignalQuality, compareBaseline, estimateDrift };
+module.exports = { runOllamaAgent, TOOL_DEFINITIONS, runReadOnlyTool };

@@ -9,15 +9,23 @@
   <main>
     <section class="intro"><div><p class="eyebrow">LOCAL SENSOR OPERATIONS</p><h1>Gas monitor <span class="tag" id="scenario">NORMAL</span></h1><p class="muted">Live readings, local alarms, and an evidence-first diagnostic agent.</p></div><button id="investigate" class="primary">✧ Investigate readings</button></section>
     <section class="cards">
-      <article class="card"><small>GAS RESPONSE INDEX</small><div class="big" id="gas">—</div><span>normalized sensor response · demo scale</span></article>
+      <article class="card"><small>PAIRED RESPONSE INDEX</small><div class="big" id="gas">—</div><span>mean of channel A and B · baseline-relative</span></article>
       <article class="card"><small>LOCAL ALARM</small><div class="big" id="alarm">—</div><span>determined by device-side logic</span></article>
       <article class="card"><small>TEMPERATURE / HUMIDITY</small><div class="big compact" id="environment">—</div><span>available in simulator mode</span></article>
       <article class="card"><small>DEVICE LINK</small><div class="big compact" id="source">Waiting…</div><span id="updated">—</span></article>
     </section>
-    <section class="grid">
-      <article class="panel"><div class="panelhead"><div><h2>Live sensor response</h2><p class="muted">Recent normalized values; no ppm conversion implied.</p></div><strong class="smallstatus" id="quality">WAITING</strong></div><canvas id="chart" height="240"></canvas><div class="controls" id="scenarioControls"><button data-scenario="normal">Normal</button><button data-scenario="gas">Gas response</button><button data-scenario="drift">Sensor drift</button><button data-scenario="fault">Signal fault</button></div><p class="footnote" id="scenarioNote">Scenarios are simulated values for repeatable demonstration.</p></article>
-      <article class="panel agent"><div class="panelhead"><div><h2>Ollama diagnostic agent</h2><p class="muted">The local model selects read-only sensor checks and explains the evidence.</p></div><span class="badge" id="agentMode">OLLAMA · CONNECTING</span></div><div id="finding" class="empty">Waiting for an investigation. Use a scenario button, then select “Investigate readings.”</div><div id="tools" class="tools"></div></article>
+    <section class="metrics" aria-label="Live diagnostic metrics">
+      <div><small>RULE FINDING</small><b id="findingClass">Waiting for data</b></div>
+      <div><small>SENSOR HEALTH</small><b id="sensorHealth">—</b></div>
+      <div><small>CHANNEL DIFFERENCE</small><b id="channelDiff">—</b></div>
+      <div><small>CHANGE PATTERN</small><b id="driftPattern">—</b></div>
+      <div><small>TELEMETRY AGE</small><b id="telemetryAge">—</b></div>
     </section>
+    <section class="grid">
+      <article class="panel"><div class="panelhead"><div><h2>Live paired sensor response</h2><p class="muted">Channel A and B baseline-relative indices; not ppm.</p></div><strong class="smallstatus" id="quality">WAITING</strong></div><canvas id="chart" height="240"></canvas><div class="controls" id="scenarioControls"><button data-scenario="normal">Normal</button><button data-scenario="gas">Shared response</button><button data-scenario="drift">Gradual drift</button><button data-scenario="fault">ADC rail fault</button><button data-scenario="spike">Single-channel spike</button></div><p class="footnote" id="scenarioNote">Scenarios are simulated values for repeatable demonstration.</p></article>
+      <article class="panel agent"><div class="panelhead"><div><h2>Ollama diagnostic agent</h2><p class="muted">Ollama Cloud selects read-only sensor checks and explains the evidence. Investigating sends sensor history to Ollama Cloud.</p></div><span class="badge" id="agentMode">OLLAMA CLOUD · CONNECTING</span></div><div id="finding" class="empty" role="status" aria-live="polite" aria-atomic="true" aria-busy="false">Waiting for an investigation. Use a scenario button, then select “Investigate readings.”</div><div id="tools" class="tools"></div></article>
+    </section>
+    <section class="panel benchmark-panel"><div class="panelhead"><div><h2>Injected-case benchmark</h2><p class="muted">Seeded synthetic cases · software classifier metrics, not physical detector performance.</p></div><span class="badge">REPEATABLE BENCHMARK</span></div><div class="bench-metrics"><div><small>CASES</small><b id="benchCases">—</b></div><div><small>ACCURACY</small><b id="benchAccuracy">—</b></div><div><small>MACRO F1</small><b id="benchF1">—</b></div><div><small>DETECTION DELAY P50</small><b id="benchDelay">—</b></div><div><small>CLASSIFIER P95</small><b id="benchRuntime">—</b></div></div><p class="footnote">Benchmark labels are injected by the simulator; scores do not establish performance with a physical gas sensor.</p></section>
     <section class="panel action-panel"><div><h2>Response boundary</h2><p>The ESP32 handles immediate local indicators. The agent reports evidence and recommendations; it cannot operate hardware.</p></div><div class="lock">DEVICE-SIDE ALARM</div></section>
     <footer>Research demonstrator only · simulated readings are not gas concentrations · never use as a certified safety alarm.</footer>
   </main>

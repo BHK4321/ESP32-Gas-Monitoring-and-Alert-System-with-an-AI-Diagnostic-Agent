@@ -1,45 +1,74 @@
 /* Local bench demonstrator only. Not a certified gas alarm.
-   The ESP32's local LED/buzzer logic is independent of Wi-Fi and agent.
-   Confirm pinout, sensor supply, and ADC voltage before wiring. GPIO ADC is
-   not 5-V tolerant; many MQ modules are powered at 5 V. Use a suitable divider.
+   Uses two independent analog sensor channels for health/agreement checks.
+   Confirm the exact board, sensors, output voltage and pinout before wiring.
+   ESP32 ADC pins are not 5-V tolerant; add a suitable divider/interface.
 */
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include "credentials.h"
 
-constexpr int SENSOR_PIN = 34;       // Example ADC1 pin for classic ESP32; confirm board
-constexpr int LED_PIN = 2;           // Example only; board dependent
-constexpr int BUZZER_DRIVER_PIN = 25; // Use a transistor/driver, not GPIO for buzzer load
+// Optional DHT22: install the Adafruit DHT sensor library and set to 1.
+#define ENABLE_DHT22 0
+#if ENABLE_DHT22
+#include <DHT.h>
+constexpr int DHT_PIN = 4;
+DHT dht(DHT_PIN, DHT22);
+#endif
+
+constexpr int SENSOR_A_PIN = 34;       // ADC1, classic ESP32 example; confirm board
+constexpr int SENSOR_B_PIN = 35;       // ADC1, second independent analog sensor
+constexpr int LED_PIN = 2;             // Example only; board dependent
+constexpr int BUZZER_DRIVER_PIN = 25;  // Use a transistor/driver, not GPIO for buzzer load
 constexpr uint32_t SAMPLE_MS = 250;
 constexpr uint32_t BASELINE_MS = 60000;
 constexpr uint32_t TELEMETRY_MS = 2000;
-constexpr float TRIP_RATIO = 1.80f;  // Demo placeholder; characterize/calibrate first
+constexpr float TRIP_RATIO = 1.80f;  // Demonstration setting; calibrate for the actual sensor
 constexpr float CLEAR_RATIO = 1.35f;
 constexpr uint8_t TRIP_COUNT = 3, CLEAR_COUNT = 8;
+constexpr uint8_t STUCK_COUNT_LIMIT = 40;
 
-float baseline = 0;
-bool alarmOn = false;
-uint8_t highCount = 0, lowCount = 0;
+float baselineA = 0, baselineB = 0;
+uint32_t baselineSamples = 0;
+bool alarmOn = false, baselineReady = false;
+uint8_t highCount = 0, lowCount = 0, stuckCountA = 0, stuckCountB = 0;
 uint32_t lastSample = 0, bootAt = 0;
-volatile int rawValue = 0;
-volatile float latestIndex = 0;
-volatile bool latestAlarm = false;
+int rawA = 0, rawB = 0, previousRawA = -1, previousRawB = -1;
+float indexA = 0, indexB = 0, temperatureC = NAN, humidityPct = NAN;
+bool faultA = false, faultB = false;
+
+int averagedRead(int pin) {
+  uint32_t total = 0;
+  for (int i = 0; i < 8; ++i) { total += analogRead(pin); delayMicroseconds(250); }
+  return total / 8;
+}
+
+bool adcRail(int value) { return value <= 8 || value >= 4087; }
+
+void updateHealth() {
+  if (rawA == previousRawA) { if (stuckCountA < STUCK_COUNT_LIMIT) ++stuckCountA; } else stuckCountA = 0;
+  if (rawB == previousRawB) { if (stuckCountB < STUCK_COUNT_LIMIT) ++stuckCountB; } else stuckCountB = 0;
+  previousRawA = rawA; previousRawB = rawB;
+  faultA = adcRail(rawA) || stuckCountA >= STUCK_COUNT_LIMIT;
+  faultB = adcRail(rawB) || stuckCountB >= STUCK_COUNT_LIMIT;
+}
 
 void outputs(bool on) { digitalWrite(LED_PIN, on ? HIGH : LOW); digitalWrite(BUZZER_DRIVER_PIN, on ? HIGH : LOW); }
+
 void telemetryTask(void*) {
   for (;;) {
-    if (WiFi.status() == WL_CONNECTED) {
-      const int raw = rawValue;
-      const float index = latestIndex;
-      const bool alarm = latestAlarm;
+    if (WiFi.status() == WL_CONNECTED && baselineReady) {
       HTTPClient http;
       String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT + "/api/telemetry";
-      http.setTimeout(500);
+      http.setTimeout(700);
       if (http.begin(url)) {
         http.addHeader("Content-Type", "application/json");
-        char body[160];
-        snprintf(body, sizeof(body), "{\"sensor_raw\":%d,\"gas_index\":%.4f,\"alarm\":%s}", raw, index, alarm ? "true" : "false");
+        char body[320];
+#if ENABLE_DHT22
+        snprintf(body, sizeof(body), "{\"sensor_a_raw\":%d,\"sensor_b_raw\":%d,\"sensor_a_index\":%.4f,\"sensor_b_index\":%.4f,\"temperature\":%.2f,\"humidity\":%.2f,\"alarm\":%s}", rawA, rawB, indexA, indexB, temperatureC, humidityPct, alarmOn ? "true" : "false");
+#else
+        snprintf(body, sizeof(body), "{\"sensor_a_raw\":%d,\"sensor_b_raw\":%d,\"sensor_a_index\":%.4f,\"sensor_b_index\":%.4f,\"alarm\":%s}", rawA, rawB, indexA, indexB, alarmOn ? "true" : "false");
+#endif
         http.POST((uint8_t*)body, strlen(body));
         http.end();
       }
@@ -51,32 +80,55 @@ void telemetryTask(void*) {
 void setup() {
   pinMode(LED_PIN, OUTPUT); pinMode(BUZZER_DRIVER_PIN, OUTPUT); outputs(false);
   Serial.begin(115200); analogReadResolution(12); bootAt = millis();
-  WiFi.mode(WIFI_STA); WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+#if ENABLE_DHT22
+  dht.begin();
+#endif
+  WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true); WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   xTaskCreatePinnedToCore(telemetryTask, "telemetry", 6144, nullptr, 1, nullptr, 0);
-  Serial.println("Local gas monitor starting; collecting clean-air demo baseline.");
+  Serial.println("Dual-channel monitor starting; collecting per-channel clean-air baselines.");
 }
 
 void loop() {
   const uint32_t now = millis();
   if (now - lastSample < SAMPLE_MS) return;
   lastSample = now;
-  rawValue = analogRead(SENSOR_PIN);
-  if (now - bootAt < BASELINE_MS) {
-    baseline += (rawValue - baseline) / max(1.0f, float((now - bootAt) / SAMPLE_MS + 1));
-    Serial.printf("baseline,raw=%d\n", rawValue);
-    return;
+  rawA = averagedRead(SENSOR_A_PIN); rawB = averagedRead(SENSOR_B_PIN);
+  updateHealth();
+#if ENABLE_DHT22
+  const float t = dht.readTemperature(), h = dht.readHumidity();
+  if (isfinite(t)) temperatureC = t;
+  if (isfinite(h)) humidityPct = h;
+#endif
+
+  if (!baselineReady) {
+    if (now - bootAt < BASELINE_MS) {
+      if (faultA || faultB) { alarmOn = true; outputs(true); Serial.println("SENSOR_FAULT,DURING_BASELINE"); }
+      else {
+        ++baselineSamples;
+        baselineA += (rawA - baselineA) / float(baselineSamples);
+        baselineB += (rawB - baselineB) / float(baselineSamples);
+      }
+      return;
+    }
+    baselineReady = baselineA > 8 && baselineA < 4087 && baselineB > 8 && baselineB < 4087;
+    if (!baselineReady) { alarmOn = true; outputs(true); Serial.println("SENSOR_FAULT,BASELINE_INVALID"); return; }
+    Serial.printf("BASELINE_READY,a=%.1f,b=%.1f\n", baselineA, baselineB);
   }
-  const float index = baseline > 1 ? float(rawValue) / baseline : 0;
-  latestIndex = index;
-  if (!alarmOn) {
+
+  indexA = baselineA > 1 ? float(rawA) / baselineA : 0;
+  indexB = baselineB > 1 ? float(rawB) / baselineB : 0;
+  const bool responseHigh = indexA >= TRIP_RATIO || indexB >= TRIP_RATIO;
+  const bool sensorFault = faultA || faultB;
+  if (sensorFault) {
+    alarmOn = true; highCount = 0; lowCount = 0; outputs(true);
+  } else if (!alarmOn) {
     lowCount = 0;
-    if (index >= TRIP_RATIO) { if (++highCount >= TRIP_COUNT) { alarmOn = true; outputs(true); Serial.println("LOCAL_ALARM,TRIP"); } }
+    if (responseHigh || sensorFault) { if (++highCount >= TRIP_COUNT) { alarmOn = true; outputs(true); Serial.println(sensorFault ? "LOCAL_ALARM,SENSOR_FAULT" : "LOCAL_ALARM,RESPONSE_HIGH"); } }
     else highCount = 0;
   } else {
     highCount = 0;
-    if (index <= CLEAR_RATIO) { if (++lowCount >= CLEAR_COUNT) { alarmOn = false; outputs(false); Serial.println("LOCAL_ALARM,CLEAR"); } }
+    if (!sensorFault && indexA <= CLEAR_RATIO && indexB <= CLEAR_RATIO) { if (++lowCount >= CLEAR_COUNT) { alarmOn = false; outputs(false); Serial.println("LOCAL_ALARM,CLEAR"); } }
     else lowCount = 0;
   }
-  latestAlarm = alarmOn;
-  Serial.printf("sample,raw=%d,index=%.3f,alarm=%d,wifi=%d\n", rawValue, index, alarmOn, WiFi.status() == WL_CONNECTED);
+  Serial.printf("sample,a_raw=%d,b_raw=%d,a_index=%.3f,b_index=%.3f,fault_a=%d,fault_b=%d,alarm=%d,wifi=%d\n", rawA, rawB, indexA, indexB, faultA, faultB, alarmOn, WiFi.status() == WL_CONNECTED);
 }

@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "description": "Local gas-monitoring prototype with ESP32 telemetry and tool-based diagnostics",
-  "scripts": { "start": "node server.js", "test": "node --test" },
+  "scripts": { "start": "node server.js", "test": "node --test", "benchmark": "node scripts/run-benchmark.js" },
   "engines": { "node": ">=20" }
 }

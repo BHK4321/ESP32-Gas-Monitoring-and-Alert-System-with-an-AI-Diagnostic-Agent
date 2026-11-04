@@ -1,58 +1,64 @@
-# Project Progress Report — Local Gas Monitor + Diagnostic Agent
+# Project Progress Report — Gas Monitor with Sensor Diagnostics Agent
 
-**Report date:** 2 November 2026  
-**Build target:** Local laptop dashboard + ESP32 telemetry over local Wi-Fi  
-**Current stage:** Software prototype complete; physical hardware verification pending
+**Report date:** 3 November 2026  
+**Build target:** Local dashboard and simulator, Ollama Cloud diagnostic agent, ESP32 dual-channel firmware template  
+**Current stage:** Software prototype and synthetic evaluation complete; cloud credentials and physical hardware verification pending
 
-## Project outcome
+## What is implemented
 
-The folder contains a local-only gas-monitoring prototype. It runs in simulation mode on Node.js and uses the local Ollama API for its diagnostic agent. No external account or API key is needed. The selected Ollama model must be downloaded once. An ESP32 Arduino sketch is included for local indicator control and telemetry to the laptop.
+- A local Node.js dashboard with live paired-channel graphs, status/evidence cards, scenario controls, and agent tool traces.
+- Five simulator scenarios: normal readings, shared elevated response, gradual drift, ADC rail fault, and isolated spike/disagreement.
+- A dual-channel diagnostic pipeline that checks stale or missing telemetry, ADC rail values, stuck readings, out-of-range response, channel disagreement, shared response changes, and gradual drift.
+- An Ollama Cloud tool-using agent. The LLM must call read-only checks before summarizing the rule-based evidence. There are no actuator tools, and output guards withhold selected unsafe reassurance, control advice, or definitive gas/leak claims.
+- ESP32 firmware source for two analog channels, startup baselines, a local indicator alarm with hysteresis, optional DHT22 fields, and periodic telemetry to the local dashboard.
+- A reproducible synthetic benchmark that generates a JSON report.
 
-The prototype is not a certified gas detector. Simulation values are normalized demonstration data, not gas concentrations or ppm. The included training-style thresholds are placeholders and have not been calibrated against a physical sensor.
+## Measured software results
 
-## Component results
+The benchmark currently runs **800 deterministic synthetic cases**: 100 cases each for normal, shared response, channel disagreement, and gradual change, plus 400 sensor-fault cases split across four fault patterns.
 
-| Component | Implemented | Verification result | Remaining work |
-|---|---|---|---|
-| Local web dashboard | Live status cards, rolling sensor graph, scenario controls, agent findings and tool trace | **HTTP 200**; page title `Local Gas Monitor` verified on localhost | Review visually during the presentation |
-| Local simulation | Normal, elevated-response, gradual-drift and unstable-signal scenarios | Gas-response scenario fed the local Ollama investigation; no physical gas was used | Demonstrate the remaining scenarios on the laptop |
-| Ollama diagnostic agent | Ollama API chat loop, tool-call processing, evidence trace, model explanation, read-only allowlist and output guard | **7/7 unit checks passed**; installed `qwen2.5:1.5b` made real local tool calls for all four diagnostics and returned a summary in about 11 seconds on the test machine | Benchmark repeated runs and explanation quality |
-| Local API/server | Node built-in HTTP server; telemetry, state, scenario and investigation endpoints | Dashboard and scenario endpoints returned successfully; Ollama-backed investigation endpoint tested on localhost | Verify again during the presentation if Ollama is restarted |
-| ESP32 firmware | Local baseline ratio, hysteresis, LED/buzzer-driver output, separate telemetry task | Firmware source reviewed; **not compiled or flashed** because the ESP32 board and Arduino toolchain are unavailable here | Confirm board/pins, install ESP32 Arduino core, compile, then bench-test with low-voltage indicators |
-| ESP32-to-laptop telemetry | HTTP JSON POST over LAN; no cloud dependency | Endpoint and payload format implemented; **not physically exercised** | Enter local Wi-Fi and laptop IP in private `credentials.h`, then test on the same LAN |
-| Progress report | Per-component status and test evidence | Created in this folder | Update with hardware test measurements after bench run |
+| Metric | Result | Scope |
+|---|---:|---|
+| Classification accuracy | 100% (800/800) | Synthetic cases generated from the same prototype rule definitions |
+| Macro F1 | 1.00 | Five output classes, synthetic cases only |
+| Shared-response detection delay | 7 samples median | Injected change; assumes 1-second samples, so about 7 seconds in this benchmark |
+| Rule-classifier runtime | p50 0.0227 ms; p95 0.102 ms in the saved run | Local Node.js run; runtime varies by machine and load |
+| Automated agent checks | 9 checks passed | `.env` loading, mocked Ollama API, and deterministic software behavior |
 
-## Automated software test results
+The raw case breakdown and confusion matrix are saved in `reports/benchmark-latest.json`. Regenerate them with `npm run benchmark`.
 
-Ran `npm test` with Node.js **v26.7.0**:
+**Interpretation:** The 100% score measures whether the hand-coded rules reproduce the labels used to create these synthetic cases. The generated cases are not independent sensor experiments, and the score is not a gas-detection accuracy claim. The 7-sample value is an injected-pattern detection delay, not physical sensor response time.
 
-- **7 tests passed; 0 failed** in the Ollama integration unit run (mock API).
-- The live Ollama test used the installed `qwen2.5:1.5b` model on a gas-response simulation; it requested all four tools. On the latest run, the guard withheld the model's unsafe/unsupported wording and showed the ESP32-reported alarm state (ACTIVE). End-to-end investigation took about 15 seconds on the test machine.
-- The model once generated unsupported reassurance. The output guard withholds summaries matching unsafe safety/threshold reassurance or actuator-control advice and displays the ESP32-reported alarm state.
-- A deterministic diagnostic tool now distinguishes an abrupt step from a gradual response shift; a mock test confirms contradictory Ollama wording is withheld.
-- The withheld-output notice now names the matched safeguard and labels simulated alarms as simulator output rather than ESP32 telemetry.
-- A mock Ollama API response selects read-only tools; the app returns the model's final explanation and tool trace.
-- Requests to operate a relay are rejected by the tool allowlist.
-- If the local Ollama API is unavailable, the investigation reports an error instead of switching to a hand-coded agent.
+## Component status
 
-## What is not yet a measured result
+| Component | Status and evidence | Remaining work |
+|---|---|---|
+| Dashboard and local server | Implemented; E-drive dashboard and state/metrics endpoints returned HTTP 200 | Review the running dashboard in the browser |
+| Paired-sensor diagnosis | Implemented and covered by deterministic synthetic cases and software checks | Validate thresholds and sensor-fault rules against actual sensors and recorded data |
+| Ollama Cloud agent | Implemented against `https://ollama.com/api/chat`; loads `OLLAMA_API_KEY` from the ignored `.env`; default model `gpt-oss:120b`, selected for tool calling | **Live request succeeded:** HTTP 200 in 7.91 s on the simulator gas scenario; called all three required read-only tools and reported `shared_response_anomaly` | Repeat with more scenarios; this result is simulated, not physical sensor validation |
+| Agent safety boundaries | Read-only tool allowlist, required diagnostic tool calls, summary checks, explicit local-alarm reporting | Review with supervisor; pattern matching is a prototype safeguard, not a formal guarantee |
+| ESP32 firmware | Dual-channel template with baseline ratio, local LED/buzzer-driver outputs, fault checks and telemetry | Confirm exact board/sensors/wiring, compile, flash and bench-test; not yet physically tested |
+| ESP32-to-dashboard telemetry | HTTP JSON receiver and firmware client implemented | Test on a trusted private LAN with the actual board |
 
-- No physical sensor accuracy, gas concentration, detection delay, false-alarm rate, response time, or actuator reliability has been measured.
-- The ESP32 sketch has not been compiled, uploaded, or tested with your particular board/sensor/actuator.
-- The code's illustrative normalized response is not ppm. Do not report simulated scenarios as real-gas detection results.
-- Ollama is the only agent language-model API; the model is not a trained gas classifier. Immediate alarm logic remains local to the ESP32.
-- Output filtering catches specific unsafe reassurance and control-advice patterns; it is a prototype safeguard, not a formal safety guarantee.
+## What has not been measured or verified
 
-## Bench demonstration plan
+- No physical gas sensor readings, calibration curve, gas concentration, detection accuracy, false-alarm rate, or real response time have been measured.
+- Firmware has not been compiled or flashed, and no ESP32, analog sensor pair, or actuator was physically tested.
+- The live Ollama Cloud run used simulated sensor data only; no physical sensor telemetry was sent or evaluated.
+- Normalized response ratios are not ppm and do not identify a gas. The prototype cannot distinguish a real gas exposure from every possible shared sensor/environmental effect.
 
-1. Run simulation mode and show each scenario plus the agent's tool trace.
-2. After the physical circuit is checked, show clean-air readings and the board's local LED/buzzer behavior using a software-injected test scenario.
-3. If real sensor response is to be measured, use a supervised calibration setup and record repeated trials, sensor warm-up, baseline, threshold, trip/clear delay, and false alarms. Do not release fuel or flammable vapor for a demo.
-4. Save the raw readings and report actual measurements separately from simulation output.
+## Run instructions
 
-## Safety and licensing notes
+Install Node.js 20+. Copy `.env.example` to `.env`, add the Ollama key to `OLLAMA_API_KEY`, then start the app. `.env` is ignored by Git. Restart the server after editing it.
 
-- Use a low-voltage LED and suitable buzzer driver for the bench prototype. Do not connect mains loads, valves, or life-safety equipment.
-- The ESP32 ADC is not 5-V tolerant; verify the exact sensor module output and use a suitable interface.
-- Hardware mode exposes an unauthenticated HTTP telemetry endpoint on the local network; use only on a trusted private LAN.
-- The upstream GitHub repository used as a design reference does not show an explicit license file in its root listing. This project contains an independent implementation and does not copy its source files. Obtain permission or verify licensing before incorporating upstream code.
+```powershell
+npm start
+```
+
+Open `http://localhost:8765`; select a simulator scenario and click **Investigate readings**. The dashboard and simulator run locally, while investigation prompts and sensor history are sent to Ollama Cloud. Keep the key out of source files, browser code, screenshots, and source control.
+
+For software verification, run `npm test` and `npm run benchmark`. For hardware mode, see `README.md` and verify the actual pins, analog voltage limits, sensor module, and output driver before wiring. The local ESP32 alarm is independent from the cloud agent and computer connection.
+
+## Safety boundary
+
+This is a research/bench prototype, not a certified gas detector. Do not use it to protect people/property or to control valves, ventilation, mains, or safety equipment. Do not release fuel or flammable vapor for a demonstration. Use a qualified, approved calibration setup for any physical gas-response work.

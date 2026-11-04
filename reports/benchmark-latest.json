@@ -1,0 +1,85 @@
+{
+  "evaluationType": "deterministic synthetic benchmark; not physical gas detection performance",
+  "seed": 4321,
+  "repetitionsPerClass": 100,
+  "cases": 800,
+  "accuracy": 1,
+  "macroF1": 1,
+  "perClass": {
+    "no_threshold_anomaly": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "support": 100
+    },
+    "shared_response_anomaly": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "support": 100
+    },
+    "sensor_fault": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "support": 400
+    },
+    "uncertain_channel_disagreement": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "support": 100
+    },
+    "gradual_response_change": {
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "support": 100
+    }
+  },
+  "confusionMatrix": {
+    "no_threshold_anomaly": {
+      "no_threshold_anomaly": 100,
+      "shared_response_anomaly": 0,
+      "sensor_fault": 0,
+      "uncertain_channel_disagreement": 0,
+      "gradual_response_change": 0
+    },
+    "shared_response_anomaly": {
+      "no_threshold_anomaly": 0,
+      "shared_response_anomaly": 100,
+      "sensor_fault": 0,
+      "uncertain_channel_disagreement": 0,
+      "gradual_response_change": 0
+    },
+    "sensor_fault": {
+      "no_threshold_anomaly": 0,
+      "shared_response_anomaly": 0,
+      "sensor_fault": 400,
+      "uncertain_channel_disagreement": 0,
+      "gradual_response_change": 0
+    },
+    "uncertain_channel_disagreement": {
+      "no_threshold_anomaly": 0,
+      "shared_response_anomaly": 0,
+      "sensor_fault": 0,
+      "uncertain_channel_disagreement": 100,
+      "gradual_response_change": 0
+    },
+    "gradual_response_change": {
+      "no_threshold_anomaly": 0,
+      "shared_response_anomaly": 0,
+      "sensor_fault": 0,
+      "uncertain_channel_disagreement": 0,
+      "gradual_response_change": 100
+    }
+  },
+  "sharedResponseDetectionDelay": {
+    "samplesAfterInjectedChangeP50": 7,
+    "samplePeriodMsAssumed": 1000
+  },
+  "classifierRuntimeMs": {
+    "p50": 0.0227,
+    "p95": 0.102
+  }
+}
